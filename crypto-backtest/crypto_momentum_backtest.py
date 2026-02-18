@@ -47,9 +47,19 @@ CHECKPOINT_FILE = "checkpoint_signals.pkl"
 # ---------------------------------------------------------------------------
 # 1. CARGA DE DATOS
 # ---------------------------------------------------------------------------
+def _read_sample(filepath: str) -> pd.DataFrame:
+    """Lee las primeras filas de un archivo (Parquet o CSV) para detectar estructura."""
+    ext = Path(filepath).suffix.lower()
+    if ext == ".parquet":
+        df = pd.read_parquet(filepath)
+        return df.head(5)
+    else:
+        return pd.read_csv(filepath, nrows=5)
+
+
 def detect_columns(filepath: str) -> dict:
-    """Lee las primeras líneas de un CSV y detecta la estructura de columnas."""
-    sample = pd.read_csv(filepath, nrows=5)
+    """Lee las primeras líneas de un archivo y detecta la estructura de columnas."""
+    sample = _read_sample(filepath)
     cols_lower = [c.lower().strip() for c in sample.columns]
     print(f"\n  Columnas detectadas ({Path(filepath).name}): {list(sample.columns)}")
     print(f"  Shape muestra: {sample.shape}")
@@ -75,7 +85,7 @@ def detect_columns(filepath: str) -> dict:
 
     # Fallback posicional si no se detectaron nombres
     if "close" not in mapping and len(sample.columns) >= 6:
-        print("  ⚠ Usando mapeo posicional: [timestamp, open, high, low, close, volume, ...]")
+        print("  Usando mapeo posicional: [timestamp, open, high, low, close, volume, ...]")
         mapping["timestamp"] = sample.columns[0]
         mapping["open"] = sample.columns[1]
         mapping["high"] = sample.columns[2]
@@ -88,11 +98,15 @@ def detect_columns(filepath: str) -> dict:
 
 
 def load_pair(filepath: str, col_map: dict) -> pd.DataFrame:
-    """Carga un CSV de un par, filtra al año objetivo, y devuelve df limpio."""
+    """Carga un archivo Parquet/CSV de un par, filtra al año objetivo, y devuelve df limpio."""
     usecols = list(col_map.values())
     rename = {v: k for k, v in col_map.items()}
 
-    df = pd.read_csv(filepath, usecols=usecols)
+    ext = Path(filepath).suffix.lower()
+    if ext == ".parquet":
+        df = pd.read_parquet(filepath, columns=usecols)
+    else:
+        df = pd.read_csv(filepath, usecols=usecols)
     df.rename(columns=rename, inplace=True)
 
     # Parsear timestamp
@@ -120,21 +134,27 @@ def load_pair(filepath: str, col_map: dict) -> pd.DataFrame:
 
 
 def load_all_pairs(data_dir: str) -> dict:
-    """Carga todos los pares CSV del directorio. Devuelve {pair_name: DataFrame}."""
+    """Carga todos los pares del directorio (Parquet o CSV). Devuelve {pair_name: DataFrame}."""
     data_dir = Path(data_dir)
-    csv_files = sorted(data_dir.glob("*.csv"))
 
-    if not csv_files:
-        print(f"ERROR: No se encontraron archivos CSV en {data_dir}")
+    # Buscar Parquet primero, luego CSV como fallback
+    data_files = sorted(data_dir.glob("*.parquet"))
+    file_type = "Parquet"
+    if not data_files:
+        data_files = sorted(data_dir.glob("*.csv"))
+        file_type = "CSV"
+
+    if not data_files:
+        print(f"ERROR: No se encontraron archivos Parquet ni CSV en {data_dir}")
         sys.exit(1)
 
-    print(f"\nEncontrados {len(csv_files)} archivos CSV en {data_dir}")
+    print(f"\nEncontrados {len(data_files)} archivos {file_type} en {data_dir}")
 
     # Detectar columnas con el primer archivo
-    col_map = detect_columns(str(csv_files[0]))
+    col_map = detect_columns(str(data_files[0]))
 
     pairs = {}
-    for f in tqdm(csv_files, desc="Cargando pares"):
+    for f in tqdm(data_files, desc="Cargando pares"):
         name = f.stem  # nombre del archivo sin extensión
         df = load_pair(str(f), col_map)
         if len(df) > LOOKBACK_CANDLES:
@@ -1003,7 +1023,7 @@ def print_executive_summary(summary_df, wr_df, vol_wr_df, df):
 def main():
     parser = argparse.ArgumentParser(description="Crypto Futures Momentum Backtest")
     parser.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR,
-                        help="Directorio con CSVs de velas 5 min")
+                        help="Directorio con archivos Parquet/CSV de velas 5 min")
     parser.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR,
                         help="Directorio de salida para resultados")
     args = parser.parse_args()
